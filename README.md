@@ -1,5 +1,7 @@
 # Segment Studio
 
+**🔗 Live app:** https://segment-studio---project-2-ck8h7zyu5scytsxtt4ia58.streamlit.app/
+
 Automatic customer segmentation, end to end: upload a CSV, discover natural
 customer segments with K-Means, and let an LLM name and describe each one —
 no code required from the user.

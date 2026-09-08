@@ -1,5 +1,7 @@
 # Segment Studio
 
+**🔗 Live app:** https://segment-studio---project-2-ck8h7zyu5scytsxtt4ia58.streamlit.app/
+
 Upload any CSV, run K-Means segmentation with an elbow/silhouette analysis,
 auto-name the resulting segments with an LLM, and download the labeled file.
 
