@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 6px 4px 2px 4px; font-family: -apple-system, "Segoe UI", sans-serif; background: transparent; }
+  .row { margin-bottom: 18px; }
+  .row:last-child { margin-bottom: 4px; }
+  label { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; }
+  .value { font-weight: 700; }
+  input[type=range] {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 4px;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4F46E5, #C026D3);
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4F46E5, #C026D3);
+    cursor: pointer;
+    border: 2px solid white;
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <label>Min K <span class="value" id="minVal">-</span></label>
+    <input type="range" id="minSlider">
+  </div>
+  <div class="row">
+    <label>Max K <span class="value" id="maxVal">-</span></label>
+    <input type="range" id="maxSlider">
+  </div>
+<script>
+function send(type, data) {
+  window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+}
+function setValue(v) { send("streamlit:setComponentValue", {value: v, dataType: "json"}); }
+function setHeight() { send("streamlit:setFrameHeight", {height: document.body.scrollHeight}); }
+
+var minEl = document.getElementById("minSlider");
+var maxEl = document.getElementById("maxSlider");
+var minVal = document.getElementById("minVal");
+var maxVal = document.getElementById("maxVal");
+
+function report() {
+  minVal.textContent = minEl.value;
+  maxVal.textContent = maxEl.value;
+  setValue({min: parseInt(minEl.value, 10), max: parseInt(maxEl.value, 10)});
+}
+
+minEl.addEventListener("input", function () {
+  if (parseInt(minEl.value, 10) >= parseInt(maxEl.value, 10)) {
+    minEl.value = parseInt(maxEl.value, 10) - 1;
+  }
+  report();
+});
+maxEl.addEventListener("input", function () {
+  if (parseInt(maxEl.value, 10) <= parseInt(minEl.value, 10)) {
+    maxEl.value = parseInt(minEl.value, 10) + 1;
+  }
+  report();
+});
+
+function applyTheme(darkMode) {
+  var text = darkMode ? "#FAFAFA" : "#241F3D";
+  var accent = darkMode ? "#B18CFF" : "#7C3AED";
+  var track = darkMode ? "rgba(255,255,255,0.18)" : "rgba(124,58,237,0.22)";
+  document.body.style.color = text;
+  minVal.style.color = accent;
+  maxVal.style.color = accent;
+  minEl.style.background = track;
+  maxEl.style.background = track;
+}
+
+window.addEventListener("message", function (event) {
+  if (event.data.type === "streamlit:render") {
+    var args = event.data.args;
+    minEl.min = args.min_value; minEl.max = args.max_value - 1; minEl.value = args.default_min;
+    maxEl.min = args.min_value + 1; maxEl.max = args.max_value; maxEl.value = args.default_max;
+    applyTheme(!!args.dark_mode);
+    minVal.textContent = minEl.value;
+    maxVal.textContent = maxEl.value;
+    setHeight();
+  }
+});
+
+send("streamlit:componentReady", {apiVersion: 1});
+setHeight();
+</script>
+</body>
+</html>
