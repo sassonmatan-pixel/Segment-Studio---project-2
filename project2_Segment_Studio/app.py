@@ -328,20 +328,76 @@ def compute_cluster_profile(df_with_cluster: pd.DataFrame) -> pd.DataFrame:
 
 
 SILHOUETTE_TOLERANCE = 0.02  # see auto_select_k
+MIN_MEANINGFUL_SILHOUETTE = 0.5  # Kaufman & Rousseeuw: >0.5 = "reasonable structure found"
+
+
+def find_wcss_elbow_k(elbow_table: pd.DataFrame) -> int:
+    """Find the elbow of the WCSS curve via max-distance-from-chord: draw a
+    straight line from the first tested K to the last, and pick the K whose
+    point bulges furthest from that line. This is what tells the difference
+    between "still worth splitting further" and "diminishing returns" —
+    Silhouette Score alone can't see it (see auto_select_k)."""
+    table = elbow_table.sort_values("K").reset_index(drop=True)
+    k = table["K"].to_numpy(dtype=float)
+    wcss = table["WCSS"].to_numpy(dtype=float)
+    if len(k) < 3:
+        return int(k[0])
+    x = (k - k.min()) / (k.max() - k.min())
+    y = (wcss - wcss.min()) / (wcss.max() - wcss.min())
+    line_vec = np.array([x[-1] - x[0], y[-1] - y[0]])
+    line_vec /= np.linalg.norm(line_vec)
+    points = np.column_stack([x - x[0], y - y[0]])
+    projection = np.outer(points @ line_vec, line_vec)
+    distance_from_chord = np.linalg.norm(points - projection, axis=1)
+    return int(table["K"].iloc[np.argmax(distance_from_chord)])
 
 
 def auto_select_k(elbow_table: pd.DataFrame) -> int:
-    """Pick a K from the Silhouette Score table.
+    """Pick a K from the WCSS + Silhouette Score table.
 
-    Silhouette Score often keeps creeping upward as K grows (more, tinier
-    clusters look "cleaner" to the metric even when they're not useful
-    segments), so a plain argmax tends to always land on K_max. Instead,
-    pick the *smallest* K whose score is within SILHOUETTE_TOLERANCE of the
-    best score found — this keeps the "pick the best score" rule but prefers
-    the simplest model among near-ties instead of always maxing out K.
+    Silhouette Score alone has a real blind spot: on data with hierarchical
+    structure (e.g. a coarse Male/Female split that each further split into
+    finer spending-behavior segments — common in real customer data), the
+    *coarse* split can score higher on Silhouette than the finer one, simply
+    because the coarse groups are more separated. Picking the highest score
+    (or the smallest K within a small tolerance of it, which is all a plain
+    tolerance rule can do) then recommends a K that's too small, even though
+    a KMeans fit with n_init=10 makes each individual K's score itself fully
+    reproducible — the run-to-run "inconsistency" this was reported as isn't
+    randomness, it's this blind spot showing up on some datasets and not
+    others.
+
+    Fix: first find the WCSS elbow (find_wcss_elbow_k) — the point past
+    which adding more clusters stops meaningfully reducing within-cluster
+    variance — and only consider K's from there onward for the Silhouette
+    comparison. That candidate is trusted only if its own Silhouette Score
+    clears MIN_MEANINGFUL_SILHOUETTE (real structure, not a weak/artificial
+    split); otherwise we fall back to the plain best-score rule across the
+    whole range, since the WCSS elbow can't be at K_min itself (it needs a
+    neighbor on both sides) and a weak elbow candidate is worse than trusting
+    Silhouette outright.
+
+    This does not — and, on data with real ambiguity, no purely statistical
+    rule can — guarantee finding "the" true K. A dataset that truly has 2
+    very well-separated top-level groups *and* 4+ finer sub-groups doesn't
+    have one unambiguous right answer; this only fixes the specific
+    "coarse split shadows the finer real one" failure pattern, verified
+    against known-K synthetic data before shipping (see chat for the test).
     """
-    best_score = elbow_table["Silhouette Score"].max()
-    near_best = elbow_table[elbow_table["Silhouette Score"] >= best_score - SILHOUETTE_TOLERANCE]
+    table = elbow_table.sort_values("K").reset_index(drop=True)
+
+    elbow_k = find_wcss_elbow_k(table)
+    candidates = table[table["K"] >= elbow_k]
+    best_candidate_score = candidates["Silhouette Score"].max()
+    near_best_candidates = candidates[candidates["Silhouette Score"] >= best_candidate_score - SILHOUETTE_TOLERANCE]
+    elbow_pick_k = int(near_best_candidates["K"].min())
+    elbow_pick_score = table.loc[table["K"] == elbow_pick_k, "Silhouette Score"].iloc[0]
+
+    if elbow_pick_score >= MIN_MEANINGFUL_SILHOUETTE:
+        return elbow_pick_k
+
+    best_score = table["Silhouette Score"].max()
+    near_best = table[table["Silhouette Score"] >= best_score - SILHOUETTE_TOLERANCE]
     return int(near_best["K"].min())
 
 
@@ -611,6 +667,12 @@ if st.session_state.current_step == 2:
 
         if st.session_state.elbow_table is not None:
             table = st.session_state.elbow_table
+            if int(k_min) != st.session_state.k_min or int(k_max) != st.session_state.k_max:
+                st.warning(
+                    f"⚠️ You changed the K range to {int(k_min)}–{int(k_max)}, but the table and "
+                    f"recommendation below still reflect the last run ({st.session_state.k_min}–"
+                    f"{st.session_state.k_max}). Click **Run Analysis** to refresh them."
+                )
             left, right = st.columns([1, 1.3])
             with left:
                 st.table(table.style.format({"WCSS": "{:.1f}", "Silhouette Score": "{:.4f}"}))
@@ -627,8 +689,11 @@ if st.session_state.current_step == 2:
                     )
                 elif suggested_k != best_k:
                     st.caption(
-                        f"K = {best_k} scores marginally higher, but K = {suggested_k} is within "
-                        f"{SILHOUETTE_TOLERANCE} of it with a simpler model, so it's the recommendation."
+                        f"K = {best_k} has the single highest Silhouette Score, but K = {suggested_k} "
+                        "is recommended instead — it's past the point where adding clusters stops "
+                        "meaningfully reducing WCSS (the elbow) while still scoring well, which a raw "
+                        "top-score pick can miss on data with coarser sub-groupings (e.g. gender) "
+                        "sitting on top of the real, finer segments."
                     )
             with right:
                 fig, ax = themed_matplotlib_figure((6.5, 4.5))
